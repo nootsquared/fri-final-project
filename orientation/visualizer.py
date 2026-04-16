@@ -5,6 +5,7 @@ CONF_THRESHOLD = 0.4
 ARROW_LENGTH = 80
 COLOR_SOLID = (0, 255, 0)
 COLOR_DASHED = (136, 136, 136)
+_KEYPOINT_VIS_THRESH = 0.1
 
 
 def _dashed_arrow(frame, start, end, color, thickness=2, dash=8, gap=6):
@@ -31,13 +32,15 @@ def _dashed_arrow(frame, start, end, color, thickness=2, dash=8, gap=6):
 
 
 def draw_orientation(frame, keypoints, forward_vec, confidence):
+    if forward_vec is None:
+        return
     l_sh, r_sh = keypoints[5], keypoints[6]
     l_hp, r_hp = keypoints[11], keypoints[12]
 
     mids = []
-    if l_sh[2] > 0.1 and r_sh[2] > 0.1:
+    if l_sh[2] > _KEYPOINT_VIS_THRESH and r_sh[2] > _KEYPOINT_VIS_THRESH:
         mids.append((l_sh[:2] + r_sh[:2]) / 2.0)
-    if l_hp[2] > 0.1 and r_hp[2] > 0.1:
+    if l_hp[2] > _KEYPOINT_VIS_THRESH and r_hp[2] > _KEYPOINT_VIS_THRESH:
         mids.append((l_hp[:2] + r_hp[:2]) / 2.0)
     if not mids:
         return
@@ -56,9 +59,12 @@ def draw_orientation(frame, keypoints, forward_vec, confidence):
     else:
         _dashed_arrow(frame, origin, tip, color)
 
+    h, w = frame.shape[:2]
+    label_x = max(0, min(int(tip[0]) + 5, w - 30))
+    label_y = max(10, min(int(tip[1]) - 5, h - 5))
     cv2.putText(
         frame,
         f"{confidence:.0%}",
-        (int(tip[0]) + 5, int(tip[1]) - 5),
+        (label_x, label_y),
         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA
     )
