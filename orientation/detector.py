@@ -1,5 +1,5 @@
-from ultralytics import YOLO
 import numpy as np
+from ultralytics import YOLO
 
 
 class PoseDetector:
@@ -8,4 +8,13 @@ class PoseDetector:
         self.conf = conf
 
     def detect(self, frame):
-        raise NotImplementedError
+        results = self.model(frame, conf=self.conf, verbose=False)
+        annotated = results[0].plot(boxes=False)
+        persons = []
+        for r in results:
+            if r.keypoints is None:
+                continue
+            kps = r.keypoints.data.cpu().numpy()
+            for kp in kps:
+                persons.append(kp)
+        return annotated, persons
