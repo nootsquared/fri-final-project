@@ -3,13 +3,21 @@ import numpy as np
 BODY_CONF_THRESH = 0.1
 FACE_CONF_THRESH = 0.4
 
+_NOSE = 0
+_L_EAR, _R_EAR = 3, 4
+_L_SHOULDER, _R_SHOULDER = 5, 6
+_L_HIP, _R_HIP = 11, 12
+
 
 def estimate_orientation(keypoints):
-    l_shoulder = keypoints[5]
-    r_shoulder = keypoints[6]
-    l_hip = keypoints[11]
-    r_hip = keypoints[12]
-    nose = keypoints[0]
+    if keypoints.ndim != 2 or keypoints.shape != (17, 3):
+        return None, 0.0
+
+    l_shoulder = keypoints[_L_SHOULDER]
+    r_shoulder = keypoints[_R_SHOULDER]
+    l_hip = keypoints[_L_HIP]
+    r_hip = keypoints[_R_HIP]
+    nose = keypoints[_NOSE]
 
     w_s = float(min(l_shoulder[2], r_shoulder[2]))
     w_h = float(min(l_hip[2], r_hip[2]))
@@ -46,7 +54,7 @@ def estimate_orientation(keypoints):
 
     body_confs = [c for c in [l_shoulder[2], r_shoulder[2], l_hip[2], r_hip[2]] if c > BODY_CONF_THRESH]
     body_conf = float(np.mean(body_confs)) if body_confs else 0.0
-    face_conf = float(max(nose[2], np.mean([keypoints[3][2], keypoints[4][2]])))
+    face_conf = float(max(nose[2], np.mean([keypoints[_L_EAR][2], keypoints[_R_EAR][2]])))
     confidence = 0.6 * body_conf + 0.4 * face_conf
 
     return forward, confidence

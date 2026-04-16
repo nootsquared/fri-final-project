@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from orientation.estimator import estimate_orientation
 
 
