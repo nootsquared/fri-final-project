@@ -9,12 +9,10 @@ class PoseDetector:
 
     def detect(self, frame):
         results = self.model(frame, conf=self.conf, verbose=False)
-        annotated = results[0].plot(boxes=False)
+        result = results[0]
+        annotated = result.plot(boxes=False)
         persons = []
-        for r in results:
-            if r.keypoints is None:
-                continue
-            kps = r.keypoints.data.cpu().numpy()
-            for kp in kps:
+        if result.keypoints is not None:
+            for kp in result.keypoints.data.cpu().numpy():
                 persons.append(kp)
         return annotated, persons
