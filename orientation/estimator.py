@@ -39,6 +39,7 @@ def estimate_orientation(keypoints):
 
     shoulder_mid = (l_shoulder[:2] + r_shoulder[:2]) / 2.0
 
+    _no_face_disambiguation = False
     if nose[2] > FACE_CONF_THRESH:
         if np.dot(nose[:2] - shoulder_mid, forward) < 0:
             forward = -forward
@@ -49,12 +50,13 @@ def estimate_orientation(keypoints):
             if np.dot(face_centroid - shoulder_mid, forward) < 0:
                 forward = -forward
         else:
-            # No face keypoints visible: person is likely facing away; flip to point away
-            forward = -forward
+            _no_face_disambiguation = True
 
     body_confs = [c for c in [l_shoulder[2], r_shoulder[2], l_hip[2], r_hip[2]] if c > BODY_CONF_THRESH]
     body_conf = float(np.mean(body_confs)) if body_confs else 0.0
     face_conf = float(max(nose[2], np.mean([keypoints[_L_EAR][2], keypoints[_R_EAR][2]])))
     confidence = 0.6 * body_conf + 0.4 * face_conf
+    if _no_face_disambiguation:
+        confidence *= 0.5
 
     return forward, confidence

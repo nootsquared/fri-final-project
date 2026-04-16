@@ -33,7 +33,7 @@ def test_facing_camera_forward_points_up_in_image():
     assert forward[1] < 0
 
 
-def test_facing_away_forward_points_down_in_image():
+def test_facing_away_no_face_cues_yields_low_confidence():
     kp = _make_kp(
         l_shoulder=[100, 100],
         r_shoulder=[200, 100],
@@ -42,7 +42,7 @@ def test_facing_away_forward_points_down_in_image():
     )
     forward, conf = estimate_orientation(kp)
     assert forward is not None
-    assert forward[1] > 0
+    assert conf < 0.4
 
 
 def test_facing_right_forward_points_right():
