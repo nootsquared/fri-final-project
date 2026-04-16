@@ -21,24 +21,25 @@ def main():
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open source: {source!r}")
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        annotated, persons = detector.detect(frame)
+            annotated, persons = detector.detect(frame)
 
-        for kp in persons:
-            forward_vec, confidence = estimate_orientation(kp)
-            if forward_vec is not None:
-                draw_orientation(annotated, kp, forward_vec, confidence)
+            for kp in persons:
+                forward_vec, confidence = estimate_orientation(kp)
+                if forward_vec is not None:
+                    draw_orientation(annotated, kp, forward_vec, confidence)
 
-        cv2.imshow("Human Orientation", annotated)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
+            cv2.imshow("Human Orientation", annotated)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
