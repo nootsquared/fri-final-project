@@ -13,6 +13,25 @@ class PoseDetector:
         annotated = result.plot(boxes=False)
         persons = []
         if result.keypoints is not None:
-            for kp in result.keypoints.data.cpu().numpy():
-                persons.append(kp)
+            kps = result.keypoints.data.cpu().numpy()
+            # Prefer YOLO's own box predictions; fall back to keypoint extents.
+            if result.boxes is not None and len(result.boxes) == len(kps):
+                boxes = result.boxes.xyxy.cpu().numpy()
+            else:
+                boxes = None
+
+            for idx, kp in enumerate(kps):
+                if boxes is not None:
+                    bbox = boxes[idx]
+                else:
+                    # Derive bbox from visible keypoint extents.
+                    visible = kp[kp[:, 2] > 0.1, :2]
+                    if len(visible):
+                        bbox = np.array([
+                            visible[:, 0].min(), visible[:, 1].min(),
+                            visible[:, 0].max(), visible[:, 1].max(),
+                        ])
+                    else:
+                        bbox = np.zeros(4)
+                persons.append((kp, bbox))
         return annotated, persons
