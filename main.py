@@ -158,8 +158,8 @@ def _parse_args():
         help="Webcam index (e.g. 0) or video file path",
     )
     parser.add_argument(
-        "--depth", default="webcam", choices=["webcam", "realsense"],
-        help="Position estimator backend: 'webcam' (testing) or 'realsense' (BWI robot)",
+        "--depth", default="webcam", choices=["webcam", "kinect"],
+        help="Position estimator backend: 'webcam' (testing) or 'kinect' (BWI robot Azure Kinect)",
     )
     parser.add_argument(
         "--list-cameras", action="store_true",
@@ -173,10 +173,10 @@ def _parse_args():
 
 
 def _make_position_estimator(args):
-    if args.depth == "realsense":
-        from orientation.position_estimator import RealSensePositionEstimator
-        print("[main] Using RealSense depth for floor positions.")
-        return RealSensePositionEstimator()
+    if args.depth == "kinect":
+        from orientation.position_estimator import AzureKinectPositionEstimator
+        print("[main] Using Azure Kinect depth for floor positions.")
+        return AzureKinectPositionEstimator()
     else:
         from orientation.position_estimator import WebcamPositionEstimator
         print("[main] Using webcam position estimator.")
@@ -201,9 +201,9 @@ def main():
     fform     = FFormationDetector()
     stabilizer = _FormationStabilizer()
 
-    realsense_mode = args.depth == "realsense"
+    kinect_mode = args.depth == "kinect"
 
-    if not realsense_mode:
+    if not kinect_mode:
         source = int(args.source) if args.source.isdigit() else args.source
         cap = open_camera(source)
 
@@ -211,7 +211,7 @@ def main():
         consecutive_failures = 0
         while True:
             # --- Capture frame -------------------------------------------
-            if realsense_mode:
+            if kinect_mode:
                 frame = pos_est.grab_frame()
                 ret = True
             else:
@@ -313,7 +313,7 @@ def main():
                 break
 
     finally:
-        if not realsense_mode:
+        if not kinect_mode:
             cap.release()
         else:
             pos_est.stop()

@@ -1,17 +1,17 @@
 """
-Floor position estimators — shared interface for webcam testing and RealSense.
+Floor position estimators — shared interface for webcam testing and robot.
 
-Both backends return a 2D floor position (x, z) in metres (or metre-equivalent
-units) suitable for the F-formation detector.
+Both backends return a 2D floor position (x, z) in metres suitable for the
+F-formation detector.
 
-    WebcamPositionEstimator  — laptop / phone testing, no depth sensor.
-                               Estimates depth from apparent bounding-box height
-                               (no camera height or tilt parameter needed).
+    WebcamPositionEstimator      — laptop / phone testing, no depth sensor.
+                                   Estimates depth from apparent bounding-box
+                                   height (no calibration needed).
 
-    RealSensePositionEstimator — BWI robot production mode.
-                                 Reads an aligned depth frame from an Intel
-                                 RealSense camera and back-projects the foot pixel
-                                 to a real-world (x, z) point in metres.
+    AzureKinectPositionEstimator — BWI robot production mode.
+                                   Uses an Azure Kinect RGB-D camera via pyk4a.
+                                   Reads aligned depth at the foot pixel and
+                                   back-projects to real-world (x, z) metres.
 
 Usage
 -----
@@ -19,10 +19,10 @@ Usage
     est = WebcamPositionEstimator()
     pos_xz = est.get_floor_xz(frame, kp_coco, bbox)
 
-    # RealSense (robot)
-    est = RealSensePositionEstimator()
+    # Azure Kinect (robot)
+    est = AzureKinectPositionEstimator()
     color_frame = est.grab_frame()   # call once per loop iteration
-    pos_xz = est.get_floor_xz(frame, kp_coco, bbox)
+    pos_xz = est.get_floor_xz(color_frame, kp_coco, bbox)
     est.stop()                        # on shutdown
 """
 from __future__ import annotations
@@ -133,82 +133,100 @@ class WebcamPositionEstimator(PositionEstimator):
 
 
 # ---------------------------------------------------------------------------
-# RealSense backend  (BWI robot)
+# Azure Kinect backend  (BWI robot — Segway V2)
 # ---------------------------------------------------------------------------
 
-class RealSensePositionEstimator(PositionEstimator):
+class AzureKinectPositionEstimator(PositionEstimator):
     """
-    Production position estimator using an Intel RealSense RGB-D camera.
+    Production position estimator using a Microsoft Azure Kinect RGB-D camera.
 
-    Aligns the depth stream to the colour stream, queries depth at the foot
-    pixel, and back-projects to a 3D point in metres.
+    Uses `pyk4a` to open the device, capture colour + depth frames, and
+    back-project the foot pixel to a real-world (x, z) floor position.
 
-    Call `grab_frame()` once per main-loop iteration to obtain the latest
-    colour image (replaces `cap.read()`).  Call `stop()` on shutdown.
+    The depth image is automatically aligned to the colour image by pyk4a
+    (`transformed_depth`), so depth and colour pixels correspond 1-to-1.
+
+    Call `grab_frame()` once per main-loop iteration to get the latest BGR
+    colour image (drop-in replacement for `cap.read()`).
+    Call `stop()` on shutdown.
 
     Args:
-        width, height: Resolution for both streams (default 640×480).
-        fps:           Frame rate (default 30).
+        color_resolution: pyk4a ColorResolution (default RES_720P = 1280×720).
+        depth_mode:       pyk4a DepthMode (default NFOV_UNBINNED, range ~0.5–3.8 m).
+        fps:              Frame rate — 5, 15, or 30 (default 30).
     """
 
-    def __init__(self, width: int = 640, height: int = 480, fps: int = 30):
+    def __init__(
+        self,
+        color_resolution: str = "RES_720P",
+        depth_mode: str = "NFOV_UNBINNED",
+        fps: int = 30,
+    ):
         try:
-            import pyrealsense2 as rs
+            import pyk4a
+            from pyk4a import PyK4A, Config, ColorResolution, DepthMode, CalibrationType
         except ImportError as exc:
             raise ImportError(
-                "pyrealsense2 is required for RealSensePositionEstimator.\n"
-                "Install with: pip install pyrealsense2"
+                "pyk4a is required for AzureKinectPositionEstimator.\n"
+                "Install with: pip install pyk4a"
             ) from exc
 
-        self._rs = rs
-        pipeline = rs.pipeline()
-        cfg = rs.config()
-        cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
-        cfg.enable_stream(rs.stream.depth, width, height, rs.format.z16,  fps)
+        self._CalibrationType = CalibrationType
 
-        profile = pipeline.start(cfg)
-        self._pipeline = pipeline
-        self._align = rs.align(rs.stream.color)
-
-        intr = (
-            profile.get_stream(rs.stream.color)
-            .as_video_stream_profile()
-            .get_intrinsics()
+        fps_map = {5: pyk4a.FPS.FPS_5, 15: pyk4a.FPS.FPS_15, 30: pyk4a.FPS.FPS_30}
+        cfg = Config(
+            color_resolution=getattr(ColorResolution, color_resolution),
+            depth_mode=getattr(DepthMode, depth_mode),
+            camera_fps=fps_map.get(fps, pyk4a.FPS.FPS_30),
+            synchronized_images_only=True,
         )
-        self._intr = intr
-        self._depth_frame = None
+        self._k4a = PyK4A(cfg)
+        self._k4a.start()
+
+        # Extract camera intrinsics from the Kinect calibration
+        mat = self._k4a.calibration.get_camera_matrix(CalibrationType.COLOR)
+        self._fx = float(mat[0, 0])
+        self._fy = float(mat[1, 1])
+        self._cx = float(mat[0, 2])
+        self._cy = float(mat[1, 2])
+
+        self._depth_image: np.ndarray | None = None   # uint16 mm, aligned to colour
 
     # ------------------------------------------------------------------
 
     def grab_frame(self) -> np.ndarray:
         """
-        Block until the next RealSense frame pair is ready and return the
-        colour image as a BGR numpy array.  Stores the aligned depth frame
-        for use by `get_floor_xz`.
+        Capture one frame pair and return the colour image as a BGR numpy
+        array.  Stores the aligned depth image for `get_floor_xz`.
+
+        The Kinect returns BGRA; we drop the alpha channel here.
         """
-        frames = self._pipeline.wait_for_frames()
-        aligned = self._align.process(frames)
-        self._depth_frame = aligned.get_depth_frame()
-        color_image = np.asanyarray(aligned.get_color_frame().get_data())
-        return color_image
+        capture = self._k4a.get_capture()
+        # transformed_depth is depth aligned to the colour camera (uint16, mm)
+        self._depth_image = capture.transformed_depth
+        # color is BGRA uint8 — drop alpha for OpenCV compatibility
+        return capture.color[:, :, :3]
 
     def get_floor_xz(self, frame, kp_coco, bbox):
-        if self._depth_frame is None:
+        if self._depth_image is None:
             return np.array([0.0, 1.0], dtype=np.float32)
 
-        foot = _foot_pixel(kp_coco, bbox).astype(int)
-        px = int(np.clip(foot[0], 0, self._depth_frame.width  - 1))
-        py = int(np.clip(foot[1], 0, self._depth_frame.height - 1))
+        h, w = self._depth_image.shape[:2]
+        foot  = _foot_pixel(kp_coco, bbox)
+        px    = int(np.clip(foot[0], 0, w - 1))
+        py    = int(np.clip(foot[1], 0, h - 1))
 
-        depth_m = self._depth_frame.get_distance(px, py)
-        if depth_m <= 0.0:
-            return np.array([0.0, 1.0], dtype=np.float32)
+        depth_mm = float(self._depth_image[py, px])
+        if depth_mm <= 0.0:
+            # Depth invalid at this pixel — fall back to bbox-height estimate
+            bbox_h = max(10.0, float(bbox[3] - bbox[1]))
+            depth_mm = 1700.0 * self._fy / bbox_h   # 1.7 m person height
 
-        pt = self._rs.rs2_deproject_pixel_to_point(
-            self._intr, [float(px), float(py)], depth_m
-        )
-        # RealSense: pt = [X_right, Y_down, Z_forward]
-        return np.array([pt[0], pt[2]], dtype=np.float32)
+        depth_m = depth_mm / 1000.0
+        depth_m = float(np.clip(depth_m, 0.3, 8.0))
 
-    def stop(self):
-        self._pipeline.stop()
+        x = (px - self._cx) * depth_m / self._fx
+        return np.array([x, depth_m], dtype=np.float32)
+
+    def stop(self) -> None:
+        self._k4a.stop()
