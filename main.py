@@ -42,6 +42,115 @@ class _PositionSmoother:
                 del self._state[tid]
 
 
+# Frames of consecutive detection required to switch state ON / OFF.
+# At ~15 fps: 8 frames ≈ 0.5 s to confirm, 15 frames ≈ 1 s to release.
+_CONFIRM_FRAMES = 8
+_RELEASE_FRAMES = 15
+
+
+class _FormationStabilizer:
+    """
+    Hysteresis filter on F-formation detection state.
+
+    Prevents the system from flickering between "detected" and "not detected"
+    when orientation estimates are momentarily noisy.
+
+    Rules:
+      - State turns ON  after `confirm_frames` consecutive positive detections.
+      - State turns OFF after `release_frames` consecutive negative detections.
+      - While ON, the entry point and o-space centre are smoothed with EMA so
+        the goal marker doesn't jump around on the minimap.
+    """
+
+    def __init__(
+        self,
+        confirm_frames: int = _CONFIRM_FRAMES,
+        release_frames: int = _RELEASE_FRAMES,
+        smooth_alpha: float = 0.15,   # low alpha = more smoothing on the goal
+    ):
+        self._confirm   = confirm_frames
+        self._release   = release_frames
+        self._alpha     = smooth_alpha
+
+        self._pos_count = 0   # consecutive frames where detected == True
+        self._neg_count = 0   # consecutive frames where detected == False
+        self._active    = False
+
+        # Smoothed state held while active
+        self._o_space     : np.ndarray | None = None
+        self._entry_point : np.ndarray | None = None
+        self._entry_facing: float | None      = None
+
+    # -----------------------------------------------------------------------
+
+    def update(
+        self,
+        detected:     bool,
+        o_spaces:     list,
+        entry_point:  np.ndarray | None,
+        entry_facing: float | None,
+    ) -> tuple[bool, list, np.ndarray | None, float | None]:
+        """
+        Feed one frame of raw detection results.
+
+        Returns:
+            stable_detected:     Whether F-formation is considered confirmed.
+            stable_o_spaces:     Smoothed o-space centres (or raw if just
+                                 activated).
+            stable_entry_point:  Smoothed entry point (or None).
+            stable_entry_facing: Smoothed entry facing angle (or None).
+        """
+        if detected:
+            self._pos_count += 1
+            self._neg_count  = 0
+        else:
+            self._neg_count += 1
+            self._pos_count  = 0
+
+        # --- State transitions -------------------------------------------
+        if not self._active and self._pos_count >= self._confirm:
+            self._active    = True
+            # Seed smoother with the first confirmed values (no lag on entry)
+            self._o_space      = np.array(o_spaces[0], dtype=float) if o_spaces else None
+            self._entry_point  = entry_point.copy() if entry_point is not None else None
+            self._entry_facing = entry_facing
+
+        elif self._active and self._neg_count >= self._release:
+            self._active       = False
+            self._o_space      = None
+            self._entry_point  = None
+            self._entry_facing = None
+
+        # --- EMA smoothing while active ----------------------------------
+        if self._active and o_spaces and entry_point is not None:
+            new_o = np.array(o_spaces[0], dtype=float)
+            if self._o_space is None:
+                self._o_space = new_o
+            else:
+                self._o_space = self._alpha * new_o + (1 - self._alpha) * self._o_space
+
+            if self._entry_point is None:
+                self._entry_point = entry_point.copy()
+            else:
+                self._entry_point = (
+                    self._alpha * entry_point
+                    + (1 - self._alpha) * self._entry_point
+                )
+
+            # Angle EMA — handle wrap-around via complex number trick
+            if entry_facing is not None:
+                if self._entry_facing is None:
+                    self._entry_facing = entry_facing
+                else:
+                    curr = complex(np.cos(self._entry_facing), np.sin(self._entry_facing))
+                    new  = complex(np.cos(entry_facing),       np.sin(entry_facing))
+                    blended = (1 - self._alpha) * curr + self._alpha * new
+                    self._entry_facing = float(np.angle(blended))
+
+        stable_o_spaces = [self._o_space] if self._active and self._o_space is not None else []
+        return self._active, stable_o_spaces, self._entry_point, self._entry_facing
+
+
 def _parse_args():
     parser = argparse.ArgumentParser(description="Human orientation + F-formation detection")
     parser.add_argument(
@@ -85,11 +194,12 @@ def main():
             print("No cameras found.")
         return
 
-    pos_est  = _make_position_estimator(args)
-    smoother = _PositionSmoother()
-    detector = PoseDetector()
-    orient   = MotionBERTEstimator()
-    fform    = FFormationDetector()
+    pos_est   = _make_position_estimator(args)
+    smoother  = _PositionSmoother()
+    detector  = PoseDetector()
+    orient    = MotionBERTEstimator()
+    fform     = FFormationDetector()
+    stabilizer = _FormationStabilizer()
 
     realsense_mode = args.depth == "realsense"
 
@@ -149,30 +259,37 @@ def main():
                 forward_xzs.append(forward_xz)
                 confidences.append(conf)
 
-            # --- F-formation detection ------------------------------------
+            # --- F-formation detection (raw) ---------------------------------
             assignments, o_spaces = fform.detect(
                 positions, forward_xzs, confidences
             )
-            detected = any(g >= 0 for g in assignments)
+            raw_detected = any(g >= 0 for g in assignments)
 
-            # --- Entry point (where the robot should stand) ---------------
-            entry_point  = None
-            entry_facing = None
-            if detected and o_spaces:
-                # Gather positions of members in group 0
+            # --- Entry point (raw, computed every frame when detected) -------
+            raw_entry_point  = None
+            raw_entry_facing = None
+            if raw_detected and o_spaces:
                 member_positions = [
                     positions[i] for i, g in enumerate(assignments) if g == 0
                 ]
-                entry_point, entry_facing = compute_entry_point(
+                raw_entry_point, raw_entry_facing = compute_entry_point(
                     o_spaces[0], member_positions
                 )
-                if args.debug:
-                    ep = entry_point
-                    ef_deg = float(np.degrees(entry_facing))
-                    print(
-                        f"  entry=({ep[0]:+.2f}, {ep[1]:+.2f})  "
-                        f"facing={ef_deg:.0f}°"
+
+            # --- Temporal stabilizer (hysteresis + EMA smoothing) ------------
+            detected, o_spaces, entry_point, entry_facing = stabilizer.update(
+                raw_detected, o_spaces, raw_entry_point, raw_entry_facing
+            )
+
+            if args.debug and (detected or raw_detected):
+                print(
+                    f"  fformation raw={raw_detected} stable={detected}  "
+                    + (
+                        f"entry=({entry_point[0]:+.2f}, {entry_point[1]:+.2f})  "
+                        f"facing={np.degrees(entry_facing):.0f}°"
+                        if entry_point is not None else "no entry"
                     )
+                )
 
             # --- Status banner (top-left) ---------------------------------
             draw_fformation_status(annotated, detected, len(persons))
