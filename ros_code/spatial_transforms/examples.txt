@@ -1,0 +1,5 @@
+1) Fire up spatial_transform_node, look at the TFs in rviz
+2) ros2 run tf2_tools view_frames; evince frames.pdf Look at the static tree
+3) Go through tf_listener_node code, explain how it works.
+3a) The print function.
+3b) Getting an Eigen matrix from 
