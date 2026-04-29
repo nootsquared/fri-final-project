@@ -5,7 +5,7 @@ import cv2
 from orientation.camera import list_cameras, open_camera
 from orientation.detector import PoseDetector
 from orientation.motionbert_estimator import MotionBERTEstimator
-from orientation.fformation import FFormationDetector
+from orientation.fformation import FFormationDetector, compute_entry_point
 from orientation.visualizer import (
     draw_orientation,
     draw_group_box,
@@ -155,6 +155,25 @@ def main():
             )
             detected = any(g >= 0 for g in assignments)
 
+            # --- Entry point (where the robot should stand) ---------------
+            entry_point  = None
+            entry_facing = None
+            if detected and o_spaces:
+                # Gather positions of members in group 0
+                member_positions = [
+                    positions[i] for i, g in enumerate(assignments) if g == 0
+                ]
+                entry_point, entry_facing = compute_entry_point(
+                    o_spaces[0], member_positions
+                )
+                if args.debug:
+                    ep = entry_point
+                    ef_deg = float(np.degrees(entry_facing))
+                    print(
+                        f"  entry=({ep[0]:+.2f}, {ep[1]:+.2f})  "
+                        f"facing={ef_deg:.0f}°"
+                    )
+
             # --- Status banner (top-left) ---------------------------------
             draw_fformation_status(annotated, detected, len(persons))
 
@@ -166,7 +185,9 @@ def main():
             # --- Top-down minimap -----------------------------------------
             if positions:
                 draw_topdown_map(
-                    annotated, positions, forward_xzs, assignments, o_spaces
+                    annotated, positions, forward_xzs, assignments, o_spaces,
+                    entry_point=entry_point,
+                    entry_facing=entry_facing,
                 )
 
             # --- Display --------------------------------------------------

@@ -273,27 +273,89 @@ def _world_to_map(x: float, z: float) -> tuple[int, int]:
     )
 
 
+def _draw_dashed_line_canvas(
+    canvas: np.ndarray,
+    p1: tuple[int, int],
+    p2: tuple[int, int],
+    color: tuple[int, int, int],
+    thickness: int = 1,
+    dash: int = 6,
+    gap: int = 4,
+) -> None:
+    """Draw a dashed line on a canvas."""
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    total = math.sqrt(dx * dx + dy * dy)
+    if total < 1e-6:
+        return
+    ux, uy = dx / total, dy / total
+    pos, draw = 0.0, True
+    while pos < total:
+        seg = dash if draw else gap
+        nxt = min(pos + seg, total)
+        if draw:
+            a = (int(p1[0] + ux * pos), int(p1[1] + uy * pos))
+            b = (int(p1[0] + ux * nxt), int(p1[1] + uy * nxt))
+            cv2.line(canvas, a, b, color, thickness)
+        pos, draw = nxt, not draw
+
+
+def _draw_diamond(
+    canvas: np.ndarray,
+    pt: tuple[int, int],
+    size: int,
+    color: tuple[int, int, int],
+    thickness: int = -1,
+) -> None:
+    """Draw a diamond (rotated square) marker."""
+    cx, cy = pt
+    pts = np.array([
+        [cx,        cy - size],
+        [cx + size, cy       ],
+        [cx,        cy + size],
+        [cx - size, cy       ],
+    ], dtype=np.int32)
+    if thickness == -1:
+        cv2.fillPoly(canvas, [pts], color)
+    else:
+        cv2.polylines(canvas, [pts], isClosed=True, color=color,
+                      thickness=thickness)
+
+
 def draw_topdown_map(
     frame: np.ndarray,
     positions: list,
     forward_xz: list,
     assignments: list[int],
     o_spaces: list,
+    entry_point: np.ndarray | None = None,
+    entry_facing: float | None = None,
+    robot_pos: np.ndarray | None = None,
 ) -> None:
     """
     Draw a bird's-eye minimap in the top-right corner of *frame* showing:
-      • Coloured dots for each person
-      • Short orientation rays
+      • Coloured dots for each person with orientation rays
       • O-space circles for each F-formation group
+      • Entry point diamond (where the robot should stand)
+      • Facing arrow at the entry point (robot's target heading)
+      • R marker at the robot/camera position
+      • Dashed path line from robot to entry point
 
     Args:
-        frame:       BGR frame to draw on (in-place).
-        positions:   List of (x, z) floor positions per person.
-        forward_xz:  List of (fx, fz) floor-plane forward vectors per person.
-        assignments: Group ID per person (-1 = unassigned).
-        o_spaces:    List of (x, z) o-space centres.
+        frame:        BGR frame to draw on (in-place).
+        positions:    List of (x, z) floor positions per person.
+        forward_xz:   List of (fx, fz) floor-plane forward vectors per person.
+        assignments:  Group ID per person (-1 = unassigned).
+        o_spaces:     List of (x, z) o-space centres.
+        entry_point:  (x, z) target position for the robot (optional).
+        entry_facing: Target heading angle in radians (optional).
+        robot_pos:    (x, z) current robot position (default: (0, 0) = camera).
     """
     h_frame, w_frame = frame.shape[:2]
+
+    usable    = _MAP_SIZE - 2 * _MAP_MARGIN
+    scale_z   = usable / _MAP_DEPTH
+    scale_x   = usable / (2.0 * _MAP_WIDTH)
 
     # Build map canvas
     canvas = np.full((_MAP_SIZE, _MAP_SIZE, 3), 30, dtype=np.uint8)
@@ -310,43 +372,73 @@ def draw_topdown_map(
         cv2.line(canvas, (px, _MAP_MARGIN), (px, _MAP_SIZE - _MAP_MARGIN),
                  (55, 55, 55), 1)
 
-    # Camera marker at bottom-centre
-    cam_pt = _world_to_map(0.0, 0.0)
-    cv2.circle(canvas, cam_pt, 5, (200, 200, 200), -1)
-    cv2.putText(canvas, "cam", (cam_pt[0] - 12, cam_pt[1] - 7),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (180, 180, 180), 1)
-
-    # O-space circles (~0.6 m radius)
-    usable  = _MAP_SIZE - 2 * _MAP_MARGIN
-    scale_z = usable / _MAP_DEPTH
-    radius_px = max(8, int(0.6 * scale_z))
+    # O-space circles and entry circle (0.9 m radius)
+    o_radius_px   = max(8, int(0.6  * scale_z))   # visual o-space
+    ent_radius_px = max(10, int(0.9 * scale_z))    # entry perimeter circle
     for g_id, center in enumerate(o_spaces):
         color = group_color(g_id)
         mp = _world_to_map(float(center[0]), float(center[1]))
-        cv2.circle(canvas, mp, radius_px, color, 2)
-        cv2.putText(canvas, f"G{g_id}", (mp[0] + radius_px + 2, mp[1]),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1)
+        cv2.circle(canvas, mp, o_radius_px, color, 2)
+        # Entry perimeter (dashed)
+        cv2.circle(canvas, mp, ent_radius_px, color, 1)
 
-    # People
-    RAY_LEN_PX = int(0.8 * scale_z)  # 0.8 m ray
+    # People — dots + orientation rays
+    RAY_LEN_PX = max(12, int(0.8 * scale_z))
     for pos, fwd, grp in zip(positions, forward_xz, assignments):
         color = group_color(grp)
-        mp = _world_to_map(float(pos[0]), float(pos[1]))
+        mp    = _world_to_map(float(pos[0]), float(pos[1]))
 
         fx, fz = float(fwd[0]), float(fwd[1])
         mag = math.sqrt(fx * fx + fz * fz)
         if mag > 0.05:
             fx /= mag; fz /= mag
+            # fz in world space: positive = away from camera = up on map
             tip = (
-                int(mp[0] + fx * RAY_LEN_PX),
-                int(mp[1] + fz * RAY_LEN_PX),
+                int(mp[0] + fx  * RAY_LEN_PX),
+                int(mp[1] - fz  * RAY_LEN_PX),  # subtract: z+ → up → smaller py
             )
-            cv2.line(canvas, mp, tip, color, 2)
+            cv2.arrowedLine(canvas, mp, tip, color, 1, tipLength=0.3)
 
         cv2.circle(canvas, mp, 6, color, -1)
         cv2.circle(canvas, mp, 6, (0, 0, 0), 1)
 
-    # Border
+    # Robot / camera marker
+    r_xz  = robot_pos if robot_pos is not None else np.array([0.0, 0.0])
+    r_pt  = _world_to_map(float(r_xz[0]), float(r_xz[1]))
+    _ROBOT_COLOR = (255, 255, 255)
+    cv2.circle(canvas, r_pt, 7, (0, 0, 0), -1)
+    cv2.circle(canvas, r_pt, 6, _ROBOT_COLOR, -1)
+    cv2.putText(canvas, "R", (r_pt[0] - 4, r_pt[1] + 4),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 0, 0), 2)
+    cv2.putText(canvas, "R", (r_pt[0] - 4, r_pt[1] + 4),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.32, _ROBOT_COLOR, 1)
+
+    # Entry point, facing arrow, and dashed path
+    if entry_point is not None:
+        _ENTRY_COLOR = (0, 255, 220)   # bright cyan
+        ep = _world_to_map(float(entry_point[0]), float(entry_point[1]))
+
+        # Dashed path: robot → entry point
+        _draw_dashed_line_canvas(canvas, r_pt, ep, _ENTRY_COLOR, thickness=1)
+
+        # Diamond marker at entry point
+        _draw_diamond(canvas, ep, 6, (0, 0, 0), thickness=-1)
+        _draw_diamond(canvas, ep, 5, _ENTRY_COLOR, thickness=-1)
+
+        # Facing arrow at entry point (toward o-space centre)
+        if entry_facing is not None:
+            FACE_LEN = max(10, int(0.5 * scale_z))
+            ftip = (
+                int(ep[0] + math.cos(entry_facing) * FACE_LEN),
+                int(ep[1] - math.sin(entry_facing) * FACE_LEN),  # y-flip
+            )
+            cv2.arrowedLine(canvas, ep, ftip, _ENTRY_COLOR, 2, tipLength=0.4)
+
+        # Label
+        cv2.putText(canvas, "goal", (ep[0] + 7, ep[1] + 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, _ENTRY_COLOR, 1)
+
+    # Border and title
     cv2.rectangle(canvas, (0, 0), (_MAP_SIZE - 1, _MAP_SIZE - 1),
                   (120, 120, 120), 1)
     cv2.putText(canvas, "top-down", (4, 12),

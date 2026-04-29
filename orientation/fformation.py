@@ -189,3 +189,94 @@ class FFormationDetector:
         ]
 
         return assignments, o_spaces
+
+
+# ---------------------------------------------------------------------------
+# Entry point computation
+# ---------------------------------------------------------------------------
+
+def compute_entry_point(
+    o_space: np.ndarray,
+    member_positions: list[np.ndarray],
+    radius: float = 0.9,
+    camera_pos: np.ndarray | None = None,
+) -> tuple[np.ndarray, float]:
+    """
+    Compute where a robot should stand to join an F-formation.
+
+    Strategy:
+      1. Map each group member to an angle relative to the o-space centre.
+      2. Find the largest open arc between consecutive members.
+      3. Place the entry point at the arc midpoint on the o-space perimeter.
+      4. Return the facing angle (always toward the o-space centre).
+
+    If two arcs are equal in size (e.g. exactly 2 people facing each other),
+    prefer the arc whose midpoint is closest to the camera (smallest z), so
+    the robot approaches from in front rather than from behind.
+
+    Args:
+        o_space:          (x, z) o-space centre.
+        member_positions: List of (x, z) positions of group members.
+        radius:           O-space perimeter radius in metres (default 0.9 m).
+        camera_pos:       (x, z) position of the camera / robot origin.
+                          Defaults to (0, 0).
+
+    Returns:
+        entry_pos:    (x, z) position on the o-space perimeter.
+        entry_facing: Angle in radians the robot should face (toward centre).
+    """
+    if camera_pos is None:
+        camera_pos = np.array([0.0, 0.0], dtype=float)
+
+    ox, oz = float(o_space[0]), float(o_space[1])
+
+    # --- Step 1: member angles relative to o-space centre ------------------
+    angles = []
+    for pos in member_positions:
+        px, pz = float(pos[0]), float(pos[1])
+        angles.append(np.arctan2(pz - oz, px - ox))
+
+    if not angles:
+        # No members — just place the entry point nearest the camera
+        toward_cam = np.arctan2(
+            float(camera_pos[1]) - oz,
+            float(camera_pos[0]) - ox,
+        )
+        ex = ox + radius * np.cos(toward_cam)
+        ez = oz + radius * np.sin(toward_cam)
+        entry_pos = np.array([ex, ez], dtype=float)
+        facing = np.arctan2(oz - ez, ox - ex)
+        return entry_pos, float(facing)
+
+    # --- Step 2: find the largest arc gap ----------------------------------
+    angles_sorted = sorted(angles)
+    n = len(angles_sorted)
+
+    # Gaps between consecutive angles (wrap-around included)
+    gaps = []
+    for i in range(n):
+        a1 = angles_sorted[i]
+        a2 = angles_sorted[(i + 1) % n]
+        gap = (a2 - a1) % (2 * np.pi)   # always positive, in [0, 2π)
+        mid = a1 + gap / 2.0
+        gaps.append((gap, mid))
+
+    # Among arcs with the maximum gap size, pick the one whose midpoint
+    # is closest to the camera position
+    max_gap = max(g for g, _ in gaps)
+    candidates = [mid for g, mid in gaps if np.isclose(g, max_gap, atol=1e-3)]
+
+    def dist_to_camera(angle: float) -> float:
+        px = ox + radius * np.cos(angle)
+        pz = oz + radius * np.sin(angle)
+        return float(np.linalg.norm(np.array([px, pz]) - camera_pos))
+
+    entry_angle = min(candidates, key=dist_to_camera)
+
+    # --- Step 3: entry pose ------------------------------------------------
+    ex = ox + radius * np.cos(entry_angle)
+    ez = oz + radius * np.sin(entry_angle)
+    entry_pos = np.array([ex, ez], dtype=float)
+    facing = float(np.arctan2(oz - ez, ox - ex))  # toward centre
+
+    return entry_pos, facing
