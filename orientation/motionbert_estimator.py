@@ -129,6 +129,8 @@ class MotionBERTEstimator:
                         fz < 0 = facing toward camera.
                         fz > 0 = facing away from camera.
             confidence: Mean shoulder/hip keypoint confidence in [0, 1].
+            joints_3d:  (17, 3) H36M joint positions in camera space
+                        (normalized units, root-relative).
         """
         w, h = frame_wh
 
@@ -159,7 +161,7 @@ class MotionBERTEstimator:
         forward_3d = self._compute_forward(joints)
         confidence  = self._keypoint_confidence(kp_coco)
 
-        return forward_3d, float(confidence)
+        return forward_3d, float(confidence), joints
 
     # -----------------------------------------------------------------------
     # Private helpers
