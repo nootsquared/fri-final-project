@@ -42,6 +42,10 @@ class PoseDetector:
             ids = None
 
         for idx, kp in enumerate(kps):
+            # Skip degenerate rows (YOLO can occasionally return empty kp tensors)
+            if kp.ndim != 2 or kp.shape[0] != 17:
+                continue
+
             track_id = int(ids[idx]) if ids is not None else idx
 
             if boxes is not None:

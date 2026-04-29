@@ -27,6 +27,9 @@ def coco_to_h36m(kp: np.ndarray) -> np.ndarray:
     Returns:
         (17, C) array in H36M joint order.
     """
+    if kp.ndim != 2 or kp.shape[0] != 17:
+        raise ValueError(f"coco_to_h36m expected (17, C), got {kp.shape}")
+
     C = kp.shape[-1]
     y = np.zeros((17, C), dtype=np.float32)
 
