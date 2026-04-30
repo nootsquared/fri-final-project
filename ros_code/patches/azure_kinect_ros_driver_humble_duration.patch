@@ -1,0 +1,9 @@
+--- a/src/k4a_ros_device.cpp
++++ b/src/k4a_ros_device.cpp
+@@ -768,7 +768,7 @@
+   // Set the lifetime to 0.25 to prevent flickering for even 5fps configurations.
+   // New markers with the same ID will replace old markers as soon as they arrive.
+-  marker_msg->lifetime = rclcpp::Duration(0.25);
++  marker_msg->lifetime = rclcpp::Duration::from_seconds(0.25);
+   marker_msg->id = body.id * 100 + jointType;
+   marker_msg->type = Marker::SPHERE;
