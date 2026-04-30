@@ -24,11 +24,13 @@ import csv
 import math
 import os
 import sys
+import time
 
 import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Bool, Float32
 
@@ -217,6 +219,9 @@ class FFormationDetectorNode(Node):
         self._locked_angle: float | None = None
         self._locked_dist: float | None = None
         self._locked_facing: float | None = None
+        self._overdrive_start: float | None = None
+        self._pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 1)
+        self.create_timer(0.1, self._overdrive_tick)
         self._csv_path = os.path.join(_PROJECT_ROOT, "fformation_trials.csv")
         self._csv_file = open(self._csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file)
@@ -229,6 +234,17 @@ class FFormationDetectorNode(Node):
             "camera_dist_m",
         ])
         self.get_logger().info(f"Trial CSV: {self._csv_path}")
+
+    def _overdrive_tick(self) -> None:
+        if self._overdrive_start is None:
+            return
+        if time.time() - self._overdrive_start < 2.0:
+            msg = Twist()
+            msg.linear.x = 0.3  # m/s forward
+            self._pub_cmd_vel.publish(msg)
+        else:
+            self._pub_cmd_vel.publish(Twist())  # stop
+            self._overdrive_start = None
 
     @staticmethod
     def _angle_diff(a: float, b: float) -> float:
@@ -382,6 +398,8 @@ class FFormationDetectorNode(Node):
         )
 
         if detected and ep is not None and o_spaces:
+            if self._locked_angle is None:
+                self._overdrive_start = time.time()
             self._locked_angle = math.atan2(float(ep[0]), float(ep[1]))
             self._locked_dist  = float(np.linalg.norm(ep))
             # Facing = direction from entry point toward o-space centre,
