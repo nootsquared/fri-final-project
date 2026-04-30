@@ -211,6 +211,8 @@ class FFormationDetectorNode(Node):
         self._frame_i = 0
         self._prev_detected = False
         self._trial_id = 0
+        self._locked_angle: float | None = None
+        self._locked_dist: float | None = None
         self._csv_path = os.path.join(_PROJECT_ROOT, "fformation_trials.csv")
         self._csv_file = open(self._csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file)
@@ -377,10 +379,14 @@ class FFormationDetectorNode(Node):
 
         self._pub_detected.publish(Bool(data=detected))
         if detected and ep is not None:
-            ang = math.atan2(float(ep[0]), float(ep[1]))
-            dist = float(np.linalg.norm(ep))
-            self._pub_angle.publish(Float32(data=ang))
-            self._pub_distance.publish(Float32(data=dist))
+            self._locked_angle = math.atan2(float(ep[0]), float(ep[1]))
+            self._locked_dist  = float(np.linalg.norm(ep))
+
+        # Publish last known goal even when detection is temporarily lost —
+        # the robot commits to the entry point and assumes the group is still.
+        if self._locked_angle is not None:
+            self._pub_angle.publish(Float32(data=self._locked_angle))
+            self._pub_distance.publish(Float32(data=self._locked_dist))
         else:
             self._pub_angle.publish(Float32(data=0.0))
             self._pub_distance.publish(Float32(data=0.0))
