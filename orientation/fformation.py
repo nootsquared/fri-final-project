@@ -230,6 +230,14 @@ def compute_entry_point(
 
     ox, oz = float(o_space[0]), float(o_space[1])
 
+    # --- Dynamic radius: ensure robot is always outside the o-space circle -
+    # If the o-space centre is closer than `radius`, the perimeter would cross
+    # behind the camera.  Cap the radius to 90 % of the camera→o-space
+    # distance so the nearest perimeter point always has positive z.
+    camera_dist = float(np.linalg.norm(np.array([ox, oz]) - camera_pos))
+    if camera_dist > 0:
+        radius = min(radius, camera_dist * 0.9)
+
     # --- Step 1: member angles relative to o-space centre ------------------
     angles = []
     for pos in member_positions:
@@ -262,7 +270,7 @@ def compute_entry_point(
         gaps.append((gap, mid))
 
     # Among arcs with the maximum gap size, pick the one whose midpoint
-    # is closest to the camera position
+    # is closest to the camera position.
     max_gap = max(g for g, _ in gaps)
     candidates = [mid for g, mid in gaps if np.isclose(g, max_gap, atol=1e-3)]
 

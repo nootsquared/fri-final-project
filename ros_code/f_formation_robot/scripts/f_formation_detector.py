@@ -20,6 +20,7 @@ Or: ros2 run f_formation_robot f_formation_detector.py
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import os
 import sys
@@ -208,6 +209,79 @@ class FFormationDetectorNode(Node):
         self.get_logger().info("Perception stack ready.")
 
         self._frame_i = 0
+        self._prev_detected = False
+        self._trial_id = 0
+        self._csv_path = os.path.join(_PROJECT_ROOT, "fformation_trials.csv")
+        self._csv_file = open(self._csv_path, "w", newline="")
+        self._csv_writer = csv.writer(self._csv_file)
+        self._csv_writer.writerow([
+            "trial",
+            "open_arc_angle_deg",
+            "open_arc_size_deg",
+            "fformation_deviation_deg",
+            "baseline_deviation_deg",
+            "camera_dist_m",
+        ])
+        self.get_logger().info(f"Trial CSV: {self._csv_path}")
+
+    @staticmethod
+    def _angle_diff(a: float, b: float) -> float:
+        """Signed smallest angle from b to a, in (-π, π]."""
+        return (a - b + math.pi) % (2 * math.pi) - math.pi
+
+    def _log_trial(
+        self,
+        o_space: np.ndarray,
+        member_positions: list[np.ndarray],
+        ep: np.ndarray,
+    ) -> None:
+        ox, oz = float(o_space[0]), float(o_space[1])
+
+        # Recompute open arc from member angles (mirrors fformation.py logic)
+        m_angles = sorted(
+            math.atan2(float(p[1]) - oz, float(p[0]) - ox)
+            for p in member_positions
+        )
+        if len(m_angles) >= 2:
+            n = len(m_angles)
+            gaps = []
+            for i in range(n):
+                a1 = m_angles[i]
+                a2 = m_angles[(i + 1) % n]
+                gap = (a2 - a1) % (2 * math.pi)
+                gaps.append((gap, a1 + gap / 2.0))
+            open_arc_size, open_arc_angle = max(gaps, key=lambda g: g[0])
+        else:
+            # Fallback if not enough members
+            open_arc_angle = math.atan2(0.0 - oz, 0.0 - ox)
+            open_arc_size = 2 * math.pi
+
+        # F-formation deviation: angle of chosen entry point vs open arc center
+        ff_angle = math.atan2(float(ep[1]) - oz, float(ep[0]) - ox)
+        ff_dev = abs(self._angle_diff(ff_angle, open_arc_angle))
+
+        # Baseline deviation: naive centroid approach heads from camera toward
+        # o-space, landing on the near perimeter (camera direction = angle from
+        # o-space toward origin).
+        baseline_angle = math.atan2(0.0 - oz, 0.0 - ox)
+        baseline_dev = abs(self._angle_diff(baseline_angle, open_arc_angle))
+
+        camera_dist = math.sqrt(ox ** 2 + oz ** 2)
+
+        self._csv_writer.writerow([
+            self._trial_id,
+            round(math.degrees(open_arc_angle), 2),
+            round(math.degrees(open_arc_size), 2),
+            round(math.degrees(ff_dev), 2),
+            round(math.degrees(baseline_dev), 2),
+            round(camera_dist, 3),
+        ])
+        self._csv_file.flush()
+        self.get_logger().info(
+            f"[trial {self._trial_id}] open_arc={math.degrees(open_arc_angle):.1f}° "
+            f"ff_dev={math.degrees(ff_dev):.1f}° "
+            f"baseline_dev={math.degrees(baseline_dev):.1f}°"
+        )
 
     def _on_info(self, msg: CameraInfo):
         if self._fx is None:
@@ -292,6 +366,7 @@ class FFormationDetectorNode(Node):
         )
         raw_ok = any(g >= 0 for g in assignments)
         raw_ep = raw_ef = None
+        mem: list[np.ndarray] = []
         if raw_ok and o_spaces:
             mem = [positions[i] for i, g in enumerate(assignments) if g == 0]
             raw_ep, raw_ef = compute_entry_point(o_spaces[0], mem)
@@ -309,6 +384,12 @@ class FFormationDetectorNode(Node):
         else:
             self._pub_angle.publish(Float32(data=0.0))
             self._pub_distance.publish(Float32(data=0.0))
+
+        # --- Trial logging: record once per detection onset ------------------
+        if detected and not self._prev_detected and ep is not None and o_spaces:
+            self._trial_id += 1
+            self._log_trial(o_spaces[0], mem, ep)
+        self._prev_detected = detected
 
         if self._frame_i % 6 == 0:
             draw_fformation_status(annotated, detected, len(persons))
