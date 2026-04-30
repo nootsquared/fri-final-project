@@ -377,17 +377,19 @@ class FFormationDetectorNode(Node):
             raw_ok, o_spaces, raw_ep, raw_ef
         )
 
-        self._pub_detected.publish(Bool(data=detected))
         if detected and ep is not None:
             self._locked_angle = math.atan2(float(ep[0]), float(ep[1]))
             self._locked_dist  = float(np.linalg.norm(ep))
 
-        # Publish last known goal even when detection is temporarily lost —
-        # the robot commits to the entry point and assumes the group is still.
+        # Once we have a confirmed goal, keep publishing it — including
+        # detected=True — even if the formation temporarily leaves the FOV.
+        # The robot commits to the entry point and assumes the group is still.
         if self._locked_angle is not None:
+            self._pub_detected.publish(Bool(data=True))
             self._pub_angle.publish(Float32(data=self._locked_angle))
             self._pub_distance.publish(Float32(data=self._locked_dist))
         else:
+            self._pub_detected.publish(Bool(data=False))
             self._pub_angle.publish(Float32(data=0.0))
             self._pub_distance.publish(Float32(data=0.0))
 
