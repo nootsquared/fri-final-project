@@ -37,7 +37,7 @@ public:
                          Nav2 when the formation is stable.
     */
     FollowerRobotNode(
-        double follow_distance   = 0.9,
+        double follow_distance   = 0.1,
         double angle_threshold   = 0.08);
     ~FollowerRobotNode();
 
@@ -46,6 +46,7 @@ protected:
     void fformationDetectedCallback(const std_msgs::msg::Bool::SharedPtr msg);
     void goalAngleCallback(const std_msgs::msg::Float32::SharedPtr msg);
     void goalDistanceCallback(const std_msgs::msg::Float32::SharedPtr msg);
+    void entryFacingCallback(const std_msgs::msg::Float32::SharedPtr msg);
 
     /*
         F-formation equivalent of the template's computeGoToFrameFromBaseLink.
@@ -82,14 +83,16 @@ protected:
 
     // ---- F-formation state ----
     bool   fformation_detected_;
-    double goal_angle_;      // radians, + = right of camera axis
-    double goal_distance_;   // metres to entry point
-    double goal_angle_prev_; // last angle for which a goal was sent
+    double goal_angle_;        // radians, + = right of camera axis
+    double goal_distance_;     // metres to entry point
+    double goal_angle_prev_;   // last angle for which a goal was sent
+    double entry_facing_;      // heading to hold on arrival (toward o-space centre)
 
     // ---- Subscribers ----
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr    detected_sub_;
     rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr angle_sub_;
     rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr distance_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr facing_sub_;
 };
 
 #endif

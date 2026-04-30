@@ -180,6 +180,9 @@ class FFormationDetectorNode(Node):
         self._pub_distance = self.create_publisher(
             Float32, "/fformation/goal_distance", 10
         )
+        self._pub_facing = self.create_publisher(
+            Float32, "/fformation/entry_facing", 10
+        )
         self._pub_dbg = self.create_publisher(
             Image, "/fformation/debug_image", 2
         )
@@ -213,6 +216,7 @@ class FFormationDetectorNode(Node):
         self._trial_id = 0
         self._locked_angle: float | None = None
         self._locked_dist: float | None = None
+        self._locked_facing: float | None = None
         self._csv_path = os.path.join(_PROJECT_ROOT, "fformation_trials.csv")
         self._csv_file = open(self._csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file)
@@ -377,9 +381,14 @@ class FFormationDetectorNode(Node):
             raw_ok, o_spaces, raw_ep, raw_ef
         )
 
-        if detected and ep is not None:
+        if detected and ep is not None and o_spaces:
             self._locked_angle = math.atan2(float(ep[0]), float(ep[1]))
             self._locked_dist  = float(np.linalg.norm(ep))
+            # Facing = direction from entry point toward o-space centre,
+            # in goal_angle convention: atan2(cam_x, cam_z).
+            ox = float(o_spaces[0][0])
+            oz = float(o_spaces[0][1])
+            self._locked_facing = math.atan2(ox - float(ep[0]), oz - float(ep[1]))
 
         # Once we have a confirmed goal, keep publishing it — including
         # detected=True — even if the formation temporarily leaves the FOV.
@@ -388,10 +397,12 @@ class FFormationDetectorNode(Node):
             self._pub_detected.publish(Bool(data=True))
             self._pub_angle.publish(Float32(data=self._locked_angle))
             self._pub_distance.publish(Float32(data=self._locked_dist))
+            self._pub_facing.publish(Float32(data=self._locked_facing))
         else:
             self._pub_detected.publish(Bool(data=False))
             self._pub_angle.publish(Float32(data=0.0))
             self._pub_distance.publish(Float32(data=0.0))
+            self._pub_facing.publish(Float32(data=0.0))
 
         # --- Trial logging: record once per detection onset ------------------
         if detected and not self._prev_detected and ep is not None and o_spaces:

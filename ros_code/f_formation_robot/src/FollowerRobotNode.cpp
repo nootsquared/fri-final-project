@@ -26,7 +26,8 @@ FollowerRobotNode::FollowerRobotNode(
     fformation_detected_(false),
     goal_angle_(0.0),
     goal_distance_(0.0),
-    goal_angle_prev_(999.0)   // sentinel — forces first goal to be sent
+    goal_angle_prev_(999.0),  // sentinel — forces first goal to be sent
+    entry_facing_(0.0)
 {
     detected_sub_ = this->create_subscription<std_msgs::msg::Bool>(
         "/fformation/detected", 1,
@@ -41,6 +42,11 @@ FollowerRobotNode::FollowerRobotNode(
     distance_sub_ = this->create_subscription<std_msgs::msg::Float32>(
         "/fformation/goal_distance", 1,
         std::bind(&FollowerRobotNode::goalDistanceCallback, this,
+                  std::placeholders::_1));
+
+    facing_sub_ = this->create_subscription<std_msgs::msg::Float32>(
+        "/fformation/entry_facing", 1,
+        std::bind(&FollowerRobotNode::entryFacingCallback, this,
                   std::placeholders::_1));
 
     RCLCPP_INFO(this->get_logger(),
@@ -67,6 +73,12 @@ void FollowerRobotNode::goalDistanceCallback(
     const std_msgs::msg::Float32::SharedPtr msg)
 {
     goal_distance_ = static_cast<double>(msg->data);
+}
+
+void FollowerRobotNode::entryFacingCallback(
+    const std_msgs::msg::Float32::SharedPtr msg)
+{
+    entry_facing_ = static_cast<double>(msg->data);
 }
 
 /*
@@ -108,9 +120,10 @@ Eigen::MatrixXd FollowerRobotNode::computeGoToFromFFormation(
 
     double magnitude = sqrt(tx*tx + ty*ty + tz*tz);
 
-    // Heading: face the entry point (same atan2 logic as the original)
-    double heading = atan2(ty, tx);
-    Eigen::AngleAxisd rot_z(heading, Eigen::Vector3d::UnitZ());
+    // Heading: face toward the o-space centre on arrival.
+    // entry_facing_ is in goal_angle convention (atan2(cam_x, cam_z));
+    // base_link heading = -entry_facing_ due to the ROS right-hand rule.
+    Eigen::AngleAxisd rot_z(-entry_facing_, Eigen::Vector3d::UnitZ());
     Eigen::MatrixXd matrix = Eigen::MatrixXd::Identity(4, 4);
     matrix.block<3,3>(0,0) = rot_z.toRotationMatrix();
 
