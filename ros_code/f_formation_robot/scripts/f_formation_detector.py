@@ -238,7 +238,7 @@ class FFormationDetectorNode(Node):
     def _overdrive_tick(self) -> None:
         if self._overdrive_start is None:
             return
-        if time.time() - self._overdrive_start < 2.0:
+        if time.time() - self._overdrive_start < 10.0:
             msg = Twist()
             msg.linear.x = 0.3  # m/s forward
             self._pub_cmd_vel.publish(msg)
