@@ -8,18 +8,7 @@ class PoseDetector:
         self.conf = conf
 
     def detect(self, frame):
-        """
-        Run pose detection + tracking on *frame*.
-
-        Returns:
-            annotated: frame with YOLO skeleton overlay.
-            persons:   list of (track_id, keypoints, bbox) tuples.
-                       track_id is a stable integer across frames (from YOLO
-                       tracker); falls back to detection index if unavailable.
-        """
-        results = self.model.track(
-            frame, conf=self.conf, persist=True, verbose=False
-        )
+        results = self.model.track(frame, conf=self.conf, persist=True, verbose=False)
         result = results[0]
         annotated = result.plot(boxes=False)
         persons = []
@@ -31,7 +20,6 @@ class PoseDetector:
 
         if result.boxes is not None and len(result.boxes) == len(kps):
             boxes = result.boxes.xyxy.cpu().numpy()
-            # Stable track IDs (None when tracker hasn't assigned yet)
             ids = (
                 result.boxes.id.cpu().numpy().astype(int)
                 if result.boxes.id is not None
@@ -42,7 +30,6 @@ class PoseDetector:
             ids = None
 
         for idx, kp in enumerate(kps):
-            # Skip degenerate rows (YOLO can occasionally return empty kp tensors)
             if kp.ndim != 2 or kp.shape[0] != 17:
                 continue
 

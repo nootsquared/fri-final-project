@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""
-F-formation ROS 2 perception node.
-
-Subscribes to Azure Kinect topics (same names as BWI stack):
-  /rgb/image_raw, /depth_to_rgb/image_raw, /rgb/camera_info
-
-Runs YOLO + MotionBERT + F-formation (project `orientation/` package).
-Publishes:
-  /fformation/detected       Bool
-  /fformation/goal_angle     Float32 (rad, + = right)
-  /fformation/goal_distance  Float32 (m)
-  /fformation/debug_image    sensor_msgs/Image  (optional, throttled)
-
-Usage (after sourcing ROS + workspace):
-  python3 ~/fri-final-project/ros_code/f_formation_robot/scripts/f_formation_detector.py
-
-Or: ros2 run f_formation_robot f_formation_detector.py
-"""
 from __future__ import annotations
 
 import argparse
@@ -32,9 +14,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Bool, Float32
 
-# ---------------------------------------------------------------------------
-# Project root: .../fri-final-project  (three levels up from this script)
-# ---------------------------------------------------------------------------
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", "..", ".."))
 if _PROJECT_ROOT not in sys.path:
@@ -150,18 +129,14 @@ class _FormationStabilizer:
 
 def _image_to_bgr(msg: Image) -> np.ndarray:
     if msg.encoding in ("bgra8", "rgba8"):
-        arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(
-            msg.height, msg.width, 4
-        )
+        arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 4)
         return arr[:, :, :3].copy()
     if msg.encoding == "bgr8":
         return np.frombuffer(msg.data, dtype=np.uint8).reshape(
             msg.height, msg.width, 3
         ).copy()
     if msg.encoding == "rgb8":
-        arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(
-            msg.height, msg.width, 3
-        )
+        arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
         return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
     raise ValueError(f"Unsupported image encoding: {msg.encoding}")
 
@@ -171,21 +146,11 @@ class FFormationDetectorNode(Node):
         super().__init__("f_formation_detector")
         self._debug = debug
 
-        self._pub_detected = self.create_publisher(
-            Bool, "/fformation/detected", 10
-        )
-        self._pub_angle = self.create_publisher(
-            Float32, "/fformation/goal_angle", 10
-        )
-        self._pub_distance = self.create_publisher(
-            Float32, "/fformation/goal_distance", 10
-        )
-        self._pub_facing = self.create_publisher(
-            Float32, "/fformation/entry_facing", 10
-        )
-        self._pub_dbg = self.create_publisher(
-            Image, "/fformation/debug_image", 2
-        )
+        self._pub_detected = self.create_publisher(Bool, "/fformation/detected", 10)
+        self._pub_angle    = self.create_publisher(Float32, "/fformation/goal_angle", 10)
+        self._pub_distance = self.create_publisher(Float32, "/fformation/goal_distance", 10)
+        self._pub_facing   = self.create_publisher(Float32, "/fformation/entry_facing", 10)
+        self._pub_dbg      = self.create_publisher(Image, "/fformation/debug_image", 2)
 
         self._sub_color = self.create_subscription(
             Image, "/rgb/image_raw", self._on_color, 10
@@ -203,11 +168,11 @@ class FFormationDetectorNode(Node):
         self._cx: float | None = None
 
         self.get_logger().info(f"PROJECT_ROOT={_PROJECT_ROOT}")
-        self.get_logger().info("Loading YOLO + MotionBERT…")
-        self._detector = PoseDetector()
-        self._orient = MotionBERTEstimator()
-        self._fform = FFormationDetector()
-        self._smoother = _PositionSmoother()
+        self.get_logger().info("Loading YOLO + MotionBERT...")
+        self._detector  = PoseDetector()
+        self._orient    = MotionBERTEstimator()
+        self._fform     = FFormationDetector()
+        self._smoother  = _PositionSmoother()
         self._stabilizer = _FormationStabilizer()
         self.get_logger().info("Perception stack ready.")
 
@@ -232,7 +197,6 @@ class FFormationDetectorNode(Node):
 
     @staticmethod
     def _angle_diff(a: float, b: float) -> float:
-        """Signed smallest angle from b to a, in (-π, π]."""
         return (a - b + math.pi) % (2 * math.pi) - math.pi
 
     def _log_trial(
@@ -243,7 +207,6 @@ class FFormationDetectorNode(Node):
     ) -> None:
         ox, oz = float(o_space[0]), float(o_space[1])
 
-        # Recompute open arc from member angles (mirrors fformation.py logic)
         m_angles = sorted(
             math.atan2(float(p[1]) - oz, float(p[0]) - ox)
             for p in member_positions
@@ -258,17 +221,12 @@ class FFormationDetectorNode(Node):
                 gaps.append((gap, a1 + gap / 2.0))
             open_arc_size, open_arc_angle = max(gaps, key=lambda g: g[0])
         else:
-            # Fallback if not enough members
             open_arc_angle = math.atan2(0.0 - oz, 0.0 - ox)
             open_arc_size = 2 * math.pi
 
-        # F-formation deviation: angle of chosen entry point vs open arc center
         ff_angle = math.atan2(float(ep[1]) - oz, float(ep[0]) - ox)
         ff_dev = abs(self._angle_diff(ff_angle, open_arc_angle))
 
-        # Baseline deviation: naive centroid approach heads from camera toward
-        # o-space, landing on the near perimeter (camera direction = angle from
-        # o-space toward origin).
         baseline_angle = math.atan2(0.0 - oz, 0.0 - ox)
         baseline_dev = abs(self._angle_diff(baseline_angle, open_arc_angle))
 
@@ -300,9 +258,7 @@ class FFormationDetectorNode(Node):
             )
 
     def _on_depth(self, msg: Image):
-        arr = np.frombuffer(msg.data, dtype=np.uint16).reshape(
-            msg.height, msg.width
-        )
+        arr = np.frombuffer(msg.data, dtype=np.uint16).reshape(msg.height, msg.width)
         self._depth = arr
 
     def _floor_xz(self, frame: np.ndarray, kp, bbox) -> np.ndarray:
@@ -367,9 +323,7 @@ class FFormationDetectorNode(Node):
             forward_xzs.append(forward_xz)
             confidences.append(conf)
 
-        assignments, o_spaces = self._fform.detect(
-            positions, forward_xzs, confidences
-        )
+        assignments, o_spaces = self._fform.detect(positions, forward_xzs, confidences)
         raw_ok = any(g >= 0 for g in assignments)
         raw_ep = raw_ef = None
         mem: list[np.ndarray] = []
@@ -382,17 +336,12 @@ class FFormationDetectorNode(Node):
         )
 
         if detected and ep is not None and o_spaces:
-            self._locked_angle = math.atan2(float(ep[0]), float(ep[1]))
-            self._locked_dist  = float(np.linalg.norm(ep))
-            # Facing = direction from entry point toward o-space centre,
-            # in goal_angle convention: atan2(cam_x, cam_z).
+            self._locked_angle  = math.atan2(float(ep[0]), float(ep[1]))
+            self._locked_dist   = float(np.linalg.norm(ep))
             ox = float(o_spaces[0][0])
             oz = float(o_spaces[0][1])
             self._locked_facing = math.atan2(ox - float(ep[0]), oz - float(ep[1]))
 
-        # Once we have a confirmed goal, keep publishing it — including
-        # detected=True — even if the formation temporarily leaves the FOV.
-        # The robot commits to the entry point and assumes the group is still.
         if self._locked_angle is not None:
             self._pub_detected.publish(Bool(data=True))
             self._pub_angle.publish(Float32(data=self._locked_angle))
@@ -404,7 +353,6 @@ class FFormationDetectorNode(Node):
             self._pub_distance.publish(Float32(data=0.0))
             self._pub_facing.publish(Float32(data=0.0))
 
-        # --- Trial logging: record once per detection onset ------------------
         if detected and not self._prev_detected and ep is not None and o_spaces:
             self._trial_id += 1
             self._log_trial(o_spaces[0], mem, ep)
@@ -417,20 +365,16 @@ class FFormationDetectorNode(Node):
                 draw_group_label(annotated, kp, grp)
             if positions:
                 draw_topdown_map(
-                    annotated,
-                    positions,
-                    forward_xzs,
-                    assignments,
-                    o_spaces,
+                    annotated, positions, forward_xzs, assignments, o_spaces,
                     entry_point=ep,
                     entry_facing=ef,
                 )
             out = Image()
-            out.height = annotated.shape[0]
-            out.width = annotated.shape[1]
+            out.height   = annotated.shape[0]
+            out.width    = annotated.shape[1]
             out.encoding = "bgr8"
-            out.step = out.width * 3
-            out.data = annotated.tobytes()
+            out.step     = out.width * 3
+            out.data     = annotated.tobytes()
             self._pub_dbg.publish(out)
 
 

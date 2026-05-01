@@ -4,3 +4,6 @@ venv/
 __pycache__/
 *.pyc
 models/*.pth
+.pytest_cache/
+*.DS_Store
+fformation_trials.csv
